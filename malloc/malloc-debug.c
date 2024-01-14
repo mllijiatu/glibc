@@ -33,16 +33,15 @@ extern void *__libc_valloc (size_t);
 extern void *__libc_pvalloc (size_t);
 extern void *__libc_calloc (size_t, size_t);
 
-#define DEBUG_FN(fn) \
-  static __typeof (__libc_ ## fn) __debug_ ## fn
+#define DEBUG_FN(fn) static __typeof (__libc_##fn) __debug_##fn
 
-DEBUG_FN(malloc);
-DEBUG_FN(free);
-DEBUG_FN(realloc);
-DEBUG_FN(memalign);
-DEBUG_FN(valloc);
-DEBUG_FN(pvalloc);
-DEBUG_FN(calloc);
+DEBUG_FN (malloc);
+DEBUG_FN (free);
+DEBUG_FN (realloc);
+DEBUG_FN (memalign);
+DEBUG_FN (valloc);
+DEBUG_FN (pvalloc);
+DEBUG_FN (calloc);
 
 static int debug_initialized = -1;
 
@@ -77,7 +76,7 @@ __malloc_debug_disable (enum malloc_debug_hooks flag)
 #include "mtrace.c"
 #include "malloc-check.c"
 
-#if SHLIB_COMPAT (libc_malloc_debug, GLIBC_2_0, GLIBC_2_24)
+#if SHLIB_COMPAT(libc_malloc_debug, GLIBC_2_0, GLIBC_2_24)
 extern void (*__malloc_initialize_hook) (void);
 compat_symbol_reference (libc, __malloc_initialize_hook,
 			 __malloc_initialize_hook, GLIBC_2_0);
@@ -102,7 +101,21 @@ void *(*__memalign_hook) (size_t, size_t, const void *) = memalign_hook_ini;
 
    These initial hooks are assumed to be called in a single-threaded context,
    so it is safe to reset all hooks at once upon initialization.  */
+/*
+generic_hook_ini - 初始化 malloc hooks
+- debug_initialized: 用于标记调试是否已初始化的变量，初始化为0。
+- __malloc_hook: malloc 钩子函数，初始化为NULL。
+- __realloc_hook: realloc 钩子函数，初始化为NULL。
+- __memalign_hook: memalign 钩子函数，初始化为NULL。
 
+注意：
+- malloc check 与 libc malloc 不完全共存，因此在其中一个上初始化。
+- 如果初始化 malloc check 失败，通过调用 __libc_malloc(0) 来保证初始化。
+- 在特定版本的 glibc 中，如果存在 __malloc_initialize_hook
+函数，调用该函数进行初始化。
+
+ @return: 无返回值。
+*/
 static void
 generic_hook_ini (void)
 {
@@ -118,10 +131,10 @@ generic_hook_ini (void)
        will not try to optimize it away.  */
     __libc_free (__libc_malloc (0));
 
-#if SHLIB_COMPAT (libc_malloc_debug, GLIBC_2_0, GLIBC_2_24)
+#if SHLIB_COMPAT(libc_malloc_debug, GLIBC_2_0, GLIBC_2_24)
   void (*hook) (void) = __malloc_initialize_hook;
   if (hook != NULL)
-    (*hook)();
+    (*hook) ();
 #endif
 
   debug_initialized = 1;
@@ -156,11 +169,11 @@ static size_t pagesize;
    initial size field (of SIZE_SZ bytes), there is no trailing size
    field (unlike with regular mmapped chunks).  */
 static mchunkptr dumped_main_arena_start; /* Inclusive.  */
-static mchunkptr dumped_main_arena_end;   /* Exclusive.  */
+static mchunkptr dumped_main_arena_end;	  /* Exclusive.  */
 
 /* True if the pointer falls into the dumped arena.  Use this after
    chunk_is_mmapped indicates a chunk is mmapped.  */
-#define DUMPED_MAIN_ARENA_CHUNK(p) \
+#define DUMPED_MAIN_ARENA_CHUNK(p)                                            \
   ((p) >= dumped_main_arena_start && (p) < dumped_main_arena_end)
 
 /* The allocator functions.  */
@@ -170,7 +183,7 @@ __debug_malloc (size_t bytes)
 {
   void *(*hook) (size_t, const void *) = atomic_forced_read (__malloc_hook);
   if (__builtin_expect (hook != NULL, 0))
-    return (*hook)(bytes, RETURN_ADDRESS (0));
+    return (*hook) (bytes, RETURN_ADDRESS (0));
 
   void *victim = NULL;
   size_t orig_bytes = bytes;
@@ -178,7 +191,8 @@ __debug_malloc (size_t bytes)
        || !malloc_mcheck_before (&bytes, &victim)))
     {
       victim = (__is_malloc_debug_enabled (MALLOC_CHECK_HOOK)
-		? malloc_check (bytes) : __libc_malloc (bytes));
+		    ? malloc_check (bytes)
+		    : __libc_malloc (bytes));
     }
   if (__is_malloc_debug_enabled (MALLOC_MCHECK_HOOK) && victim != NULL)
     victim = malloc_mcheck_after (victim, orig_bytes);
@@ -189,13 +203,12 @@ __debug_malloc (size_t bytes)
 }
 strong_alias (__debug_malloc, malloc)
 
-static void
-__debug_free (void *mem)
+    static void __debug_free (void *mem)
 {
   void (*hook) (void *, const void *) = atomic_forced_read (__free_hook);
   if (__builtin_expect (hook != NULL, 0))
     {
-      (*hook)(mem, RETURN_ADDRESS (0));
+      (*hook) (mem, RETURN_ADDRESS (0));
       return;
     }
 
@@ -213,13 +226,12 @@ __debug_free (void *mem)
 }
 strong_alias (__debug_free, free)
 
-static void *
-__debug_realloc (void *oldmem, size_t bytes)
+    static void *__debug_realloc (void *oldmem, size_t bytes)
 {
-  void *(*hook) (void *, size_t, const void *) =
-    atomic_forced_read (__realloc_hook);
+  void *(*hook) (void *, size_t, const void *)
+      = atomic_forced_read (__realloc_hook);
   if (__builtin_expect (hook != NULL, 0))
-    return (*hook)(oldmem, bytes, RETURN_ADDRESS (0));
+    return (*hook) (oldmem, bytes, RETURN_ADDRESS (0));
 
   size_t orig_bytes = bytes, oldsize = 0;
   void *victim = NULL;
@@ -253,13 +265,12 @@ __debug_realloc (void *oldmem, size_t bytes)
 	    }
 	}
       else if (__is_malloc_debug_enabled (MALLOC_CHECK_HOOK))
-	victim =  realloc_check (oldmem, bytes);
+	victim = realloc_check (oldmem, bytes);
       else
 	victim = __libc_realloc (oldmem, bytes);
     }
   if (__is_malloc_debug_enabled (MALLOC_MCHECK_HOOK) && victim != NULL)
-    victim = realloc_mcheck_after (victim, oldmem, orig_bytes,
-				   oldsize);
+    victim = realloc_mcheck_after (victim, oldmem, orig_bytes, oldsize);
   if (__is_malloc_debug_enabled (MALLOC_MTRACE_HOOK))
     realloc_mtrace_after (victim, oldmem, orig_bytes, RETURN_ADDRESS (0));
 
@@ -267,13 +278,13 @@ __debug_realloc (void *oldmem, size_t bytes)
 }
 strong_alias (__debug_realloc, realloc)
 
-static void *
-_debug_mid_memalign (size_t alignment, size_t bytes, const void *address)
+    static void *_debug_mid_memalign (size_t alignment, size_t bytes,
+				      const void *address)
 {
-  void *(*hook) (size_t, size_t, const void *) =
-    atomic_forced_read (__memalign_hook);
+  void *(*hook) (size_t, size_t, const void *)
+      = atomic_forced_read (__memalign_hook);
   if (__builtin_expect (hook != NULL, 0))
-    return (*hook)(alignment, bytes, address);
+    return (*hook) (alignment, bytes, address);
 
   void *victim = NULL;
   size_t orig_bytes = bytes;
@@ -282,8 +293,8 @@ _debug_mid_memalign (size_t alignment, size_t bytes, const void *address)
        || !memalign_mcheck_before (alignment, &bytes, &victim)))
     {
       victim = (__is_malloc_debug_enabled (MALLOC_CHECK_HOOK)
-		? memalign_check (alignment, bytes)
-		: __libc_memalign (alignment, bytes));
+		    ? memalign_check (alignment, bytes)
+		    : __libc_memalign (alignment, bytes));
     }
   if (__is_malloc_debug_enabled (MALLOC_MCHECK_HOOK) && victim != NULL)
     victim = memalign_mcheck_after (victim, alignment, orig_bytes);
@@ -298,9 +309,9 @@ __debug_memalign (size_t alignment, size_t bytes)
 {
   return _debug_mid_memalign (alignment, bytes, RETURN_ADDRESS (0));
 }
-strong_alias (__debug_memalign, memalign)
-static void *
-__debug_aligned_alloc (size_t alignment, size_t bytes)
+strong_alias (__debug_memalign,
+	      memalign) static void *__debug_aligned_alloc (size_t alignment,
+							    size_t bytes)
 {
   if (!powerof2 (alignment) || alignment == 0)
     return NULL;
@@ -308,8 +319,7 @@ __debug_aligned_alloc (size_t alignment, size_t bytes)
 }
 strong_alias (__debug_aligned_alloc, aligned_alloc)
 
-static void *
-__debug_pvalloc (size_t bytes)
+    static void *__debug_pvalloc (size_t bytes)
 {
   size_t rounded_bytes;
 
@@ -317,9 +327,8 @@ __debug_pvalloc (size_t bytes)
     pagesize = sysconf (_SC_PAGESIZE);
 
   /* ALIGN_UP with overflow check.  */
-  if (__glibc_unlikely (__builtin_add_overflow (bytes,
-						pagesize - 1,
-						&rounded_bytes)))
+  if (__glibc_unlikely (
+	  __builtin_add_overflow (bytes, pagesize - 1, &rounded_bytes)))
     {
       errno = ENOMEM;
       return NULL;
@@ -330,8 +339,7 @@ __debug_pvalloc (size_t bytes)
 }
 strong_alias (__debug_pvalloc, pvalloc)
 
-static void *
-__debug_valloc (size_t bytes)
+    static void *__debug_valloc (size_t bytes)
 {
   if (!pagesize)
     pagesize = sysconf (_SC_PAGESIZE);
@@ -340,14 +348,13 @@ __debug_valloc (size_t bytes)
 }
 strong_alias (__debug_valloc, valloc)
 
-static int
-__debug_posix_memalign (void **memptr, size_t alignment, size_t bytes)
+    static int __debug_posix_memalign (void **memptr, size_t alignment,
+				       size_t bytes)
 {
   /* Test whether the SIZE argument is valid.  It must be a power of
      two multiple of sizeof (void *).  */
   if (alignment % sizeof (void *) != 0
-      || !powerof2 (alignment / sizeof (void *))
-      || alignment == 0)
+      || !powerof2 (alignment / sizeof (void *)) || alignment == 0)
     return EINVAL;
 
   *memptr = _debug_mid_memalign (alignment, bytes, RETURN_ADDRESS (0));
@@ -359,8 +366,7 @@ __debug_posix_memalign (void **memptr, size_t alignment, size_t bytes)
 }
 strong_alias (__debug_posix_memalign, posix_memalign)
 
-static void *
-__debug_calloc (size_t nmemb, size_t size)
+    static void *__debug_calloc (size_t nmemb, size_t size)
 {
   size_t bytes;
 
@@ -373,7 +379,7 @@ __debug_calloc (size_t nmemb, size_t size)
   void *(*hook) (size_t, const void *) = atomic_forced_read (__malloc_hook);
   if (__builtin_expect (hook != NULL, 0))
     {
-      void *mem = (*hook)(bytes, RETURN_ADDRESS (0));
+      void *mem = (*hook) (bytes, RETURN_ADDRESS (0));
 
       if (mem != NULL)
 	memset (mem, 0, bytes);
@@ -388,7 +394,8 @@ __debug_calloc (size_t nmemb, size_t size)
        || !malloc_mcheck_before (&bytes, &victim)))
     {
       victim = (__is_malloc_debug_enabled (MALLOC_CHECK_HOOK)
-		? malloc_check (bytes) : __libc_malloc (bytes));
+		    ? malloc_check (bytes)
+		    : __libc_malloc (bytes));
     }
   if (victim != NULL)
     {
@@ -403,8 +410,7 @@ __debug_calloc (size_t nmemb, size_t size)
 }
 strong_alias (__debug_calloc, calloc)
 
-size_t
-malloc_usable_size (void *mem)
+    size_t malloc_usable_size (void *mem)
 {
   if (mem == NULL)
     return 0;
@@ -421,15 +427,16 @@ malloc_usable_size (void *mem)
   return musable (mem);
 }
 
-#define LIBC_SYMBOL(sym) libc_ ## sym
-#define SYMHANDLE(sym) sym ## _handle
+#define LIBC_SYMBOL(sym) libc_##sym
+#define SYMHANDLE(sym) sym##_handle
 
-#define LOAD_SYM(sym) ({ \
-  static void *SYMHANDLE (sym);						      \
-  if (SYMHANDLE (sym) == NULL)						      \
-    SYMHANDLE (sym) = dlsym (RTLD_NEXT, #sym);				      \
-  SYMHANDLE (sym);							      \
-})
+#define LOAD_SYM(sym)                                                         \
+  ({                                                                          \
+    static void *SYMHANDLE (sym);                                             \
+    if (SYMHANDLE (sym) == NULL)                                              \
+      SYMHANDLE (sym) = dlsym (RTLD_NEXT, #sym);                              \
+    SYMHANDLE (sym);                                                          \
+  })
 
 int
 malloc_info (int options, FILE *fp)
@@ -479,7 +486,7 @@ mallinfo2 (void)
   struct mallinfo2 (*LIBC_SYMBOL (mallinfo2)) (void) = LOAD_SYM (mallinfo2);
   if (LIBC_SYMBOL (mallinfo2) == NULL)
     {
-      struct mallinfo2 ret = {0};
+      struct mallinfo2 ret = { 0 };
       return ret;
     }
 
@@ -495,7 +502,7 @@ mallinfo (void)
   struct mallinfo (*LIBC_SYMBOL (mallinfo)) (void) = LOAD_SYM (mallinfo);
   if (LIBC_SYMBOL (mallinfo) == NULL)
     {
-      struct mallinfo ret = {0};
+      struct mallinfo ret = { 0 };
       return ret;
     }
 
@@ -515,7 +522,7 @@ malloc_trim (size_t s)
   return LIBC_SYMBOL (malloc_trim) (s);
 }
 
-#if SHLIB_COMPAT (libc_malloc_debug, GLIBC_2_0, GLIBC_2_25)
+#if SHLIB_COMPAT(libc_malloc_debug, GLIBC_2_0, GLIBC_2_25)
 
 /* Support for restoring dumped heaps contained in historic Emacs
    executables.  The heap saving feature (malloc_get_state) is no
@@ -523,8 +530,8 @@ malloc_trim (size_t s)
    rewriter in malloc_set_state which transforms the heap into a
    version compatible with current malloc.  */
 
-#define MALLOC_STATE_MAGIC   0x444c4541l
-#define MALLOC_STATE_VERSION (0 * 0x100l + 5l) /* major*0x100 + minor */
+#  define MALLOC_STATE_MAGIC 0x444c4541l
+#  define MALLOC_STATE_VERSION (0 * 0x100l + 5l) /* major*0x100 + minor */
 
 struct malloc_save_state
 {
@@ -539,7 +546,7 @@ struct malloc_save_state
   unsigned long mmap_threshold;
   int check_action;
   unsigned long max_sbrked_mem;
-  unsigned long max_total_mem;	/* Always 0, for backwards compatibility.  */
+  unsigned long max_total_mem; /* Always 0, for backwards compatibility.  */
   unsigned int n_mmaps;
   unsigned int max_n_mmaps;
   unsigned long mmapped_mem;
@@ -588,7 +595,8 @@ malloc_set_state (void *msptr)
   __malloc_debug_disable (MALLOC_CHECK_HOOK);
 
   /* We do not need to perform locking here because malloc_set_state
-     must be called before the first call into the malloc subsystem (usually via
+     must be called before the first call into the malloc subsystem (usually
+     via
      __malloc_initialize_hook).  pthread_create always calls calloc and thus
      must be called only afterwards, so there cannot be more than one thread
      when we reach this point.  Also handle initialization if either we ended

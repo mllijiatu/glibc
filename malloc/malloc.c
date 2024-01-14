@@ -1308,42 +1308,50 @@ nextchunk-> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   ((uintptr_t)(MALLOC_ALIGNMENT == CHUNK_HDR_SZ ? (p) : chunk2mem (p)) \
    & MALLOC_ALIGN_MASK)
 
-/* pad request bytes into a usable size -- internal version */
-/* Note: This must be a macro that evaluates to a compile time constant
-   if passed a literal constant.  */
+/*
+request2size - 将请求的字节数填充为可用的内存块大小（内部版本）
+注意：这必须是一个宏，如果传递的是一个字面常量，则必须产生编译时常量。
+
+@param req: 请求的字节数。
+@return: 返回填充后的内存块大小。
+*/
 #define request2size(req)                                         \
   (((req) + SIZE_SZ + MALLOC_ALIGN_MASK < MINSIZE)  ?             \
    MINSIZE :                                                      \
    ((req) + SIZE_SZ + MALLOC_ALIGN_MASK) & ~MALLOC_ALIGN_MASK)
 
-/* Check if REQ overflows when padded and aligned and if the resulting
-   value is less than PTRDIFF_T.  Returns the requested size or
-   MINSIZE in case the value is less than MINSIZE, or 0 if any of the
-   previous checks fail.  */
+
+/*
+checked_request2size - 检查 REQ 在填充和对齐后是否溢出，并确保其小于 PTRDIFF_T。
+@param req: 请求的内存大小。
+@return: 如果请求的大小小于等于 PTRDIFF_MAX，则返回请求的大小，如果小于 MINSIZE，则返回 MINSIZE，否则返回0。
+*/
 static inline size_t
 checked_request2size (size_t req) __nonnull (1)
 {
+  // 检查请求的大小是否超过 PTRDIFF_MAX
   if (__glibc_unlikely (req > PTRDIFF_MAX))
     return 0;
 
-  /* When using tagged memory, we cannot share the end of the user
-     block with the header for the next chunk, so ensure that we
-     allocate blocks that are rounded up to the granule size.  Take
-     care not to overflow from close to MAX_SIZE_T to a small
-     number.  Ideally, this would be part of request2size(), but that
-     must be a macro that produces a compile time constant if passed
-     a constant literal.  */
+  /* 当使用标记内存时，我们不能与下一个块的头部共享用户块的末尾，
+     因此确保分配的块大小向上舍入到 granule 大小。
+     要注意不要从接近 MAX_SIZE_T 的值溢出到一个小数字。
+     理想情况下，这应该是 request2size() 的一部分，
+     但那必须是一个宏，如果传递的是一个常量字面量，则必须产生编译时常量。 */
   if (__glibc_unlikely (mtag_enabled))
     {
-      /* Ensure this is not evaluated if !mtag_enabled, see gcc PR 99551.  */
+      /* 确保此部分在 !mtag_enabled 时不会被评估，参见 gcc PR 99551。 */
       asm ("");
 
+      // 将请求的大小调整为 granule 的倍数
       req = (req + (__MTAG_GRANULE_SIZE - 1)) &
 	    ~(size_t)(__MTAG_GRANULE_SIZE - 1);
     }
 
+  // 调用 request2size 函数获取最终的大小
   return request2size (req);
 }
+
 
 /*
    --------------- Physical chunk operations ---------------
@@ -1897,11 +1905,17 @@ struct malloc_par
 #endif
 };
 
-/* There are several instances of this struct ("arenas") in this
-   malloc.  If you are adapting this malloc in a way that does NOT use
-   a static or mmapped malloc_state, you MUST explicitly zero-fill it
-   before using. This malloc relies on the property that malloc_state
-   is initialized to all zeroes (as is true of C statics).  */
+/*
+   main_arena - 主要的内存池状态结构体实例
+
+注意：这个结构体的实例是malloc中的几个实例之一（"arenas"）。
+如果你以一种不使用静态或映射的malloc_state的方式调整这个malloc，
+你在使用之前必须明确地将其零填充。
+这个malloc依赖于malloc_state被初始化为全零的属性（就像C静态变量一样）。
+- mutex: 用于同步的互斥锁，初始化为_LIBC_LOCK_INITIALIZER。
+- next: 指向下一个内存池状态结构体实例的指针，这里指向自身。
+- attached_threads: 已附加的线程数，初始化为1。
+*/
 
 static struct malloc_state main_arena =
 {
@@ -3287,265 +3301,250 @@ tcache_thread_shutdown (void)
 #endif /* !USE_TCACHE  */
 
 #if IS_IN (libc)
-void *
-__libc_malloc (size_t bytes)
-{
-  mstate ar_ptr;
-  void *victim;
+// 定义内存分配函数 __libc_malloc
+// 初始化malloc，确保分配器已经初始化。
+// 如果启用了线程缓存(USE_TCACHE)，则尝试从线程缓存获取内存。
+// 如果是单线程环境，直接使用主线程的main_arena进行内存分配。
+// 在多线程环境中，获取合适的arena进行内存分配。如果分配失败，尝试使用另一个arena。
+// 对分配的内存进行标签处理，然后返回。
+void *__libc_malloc(size_t bytes) {
+  mstate ar_ptr; // 指向内存状态的指针
+  void *victim;   // 指向分配的内存块的指针
 
-  _Static_assert (PTRDIFF_MAX <= SIZE_MAX / 2,
-                  "PTRDIFF_MAX is not more than half of SIZE_MAX");
+  _Static_assert(PTRDIFF_MAX <= SIZE_MAX / 2,
+		  "PTRDIFF_MAX is not more than half of SIZE_MAX");
 
+  // 初始化 malloc
   if (!__malloc_initialized)
-    ptmalloc_init ();
+    ptmalloc_init();
+
 #if USE_TCACHE
-  /* int_free also calls request2size, be careful to not pad twice.  */
-  size_t tbytes = checked_request2size (bytes);
-  if (tbytes == 0)
-    {
-      __set_errno (ENOMEM);
+  // 使用 thread cache 进行内存分配
+  size_t tbytes = checked_request2size(bytes);
+  if (tbytes == 0) {
+      __set_errno(ENOMEM);
       return NULL;
     }
-  size_t tc_idx = csize2tidx (tbytes);
+  size_t tc_idx = csize2tidx(tbytes);
 
-  MAYBE_INIT_TCACHE ();
+  MAYBE_INIT_TCACHE();
 
-  DIAG_PUSH_NEEDS_COMMENT;
+  // 从 thread cache 获取内存
   if (tc_idx < mp_.tcache_bins
       && tcache != NULL
-      && tcache->counts[tc_idx] > 0)
-    {
-      victim = tcache_get (tc_idx);
-      return tag_new_usable (victim);
+      && tcache->counts[tc_idx] > 0) {
+      victim = tcache_get(tc_idx);
+      return tag_new_usable(victim);
     }
-  DIAG_POP_NEEDS_COMMENT;
 #endif
 
-  if (SINGLE_THREAD_P)
-    {
-      victim = tag_new_usable (_int_malloc (&main_arena, bytes));
-      assert (!victim || chunk_is_mmapped (mem2chunk (victim)) ||
-	      &main_arena == arena_for_chunk (mem2chunk (victim)));
+  // 如果是单线程环境，直接使用 main_arena 进行内存分配
+  if (SINGLE_THREAD_P) {
+      victim = tag_new_usable(_int_malloc(&main_arena, bytes));
+      assert(!victim || chunk_is_mmapped(mem2chunk(victim)) ||
+	      &main_arena == arena_for_chunk(mem2chunk(victim)));
       return victim;
     }
 
-  arena_get (ar_ptr, bytes);
+  // 多线程环境下，获取合适的 arena 进行内存分配
+  arena_get(ar_ptr, bytes);
 
-  victim = _int_malloc (ar_ptr, bytes);
-  /* Retry with another arena only if we were able to find a usable arena
-     before.  */
-  if (!victim && ar_ptr != NULL)
-    {
-      LIBC_PROBE (memory_malloc_retry, 1, bytes);
-      ar_ptr = arena_get_retry (ar_ptr, bytes);
-      victim = _int_malloc (ar_ptr, bytes);
+  victim = _int_malloc(ar_ptr, bytes);
+  // 如果分配失败，尝试使用另一个 arena
+  if (!victim && ar_ptr != NULL) {
+      LIBC_PROBE(memory_malloc_retry, 1, bytes);
+      ar_ptr = arena_get_retry(ar_ptr, bytes);
+      victim = _int_malloc(ar_ptr, bytes);
     }
 
   if (ar_ptr != NULL)
-    __libc_lock_unlock (ar_ptr->mutex);
+    __libc_lock_unlock(ar_ptr->mutex);
 
-  victim = tag_new_usable (victim);
+  victim = tag_new_usable(victim);
 
-  assert (!victim || chunk_is_mmapped (mem2chunk (victim)) ||
-          ar_ptr == arena_for_chunk (mem2chunk (victim)));
+  assert(!victim || chunk_is_mmapped(mem2chunk(victim)) ||
+	  ar_ptr == arena_for_chunk(mem2chunk(victim)));
   return victim;
 }
-libc_hidden_def (__libc_malloc)
+// 隐藏函数 __libc_malloc
+libc_hidden_def(__libc_malloc)
 
-void
-__libc_free (void *mem)
-{
+// 隐藏函数 __libc_malloc
+libc_hidden_def(__libc_malloc)
+
+    // 定义内存释放函数 __libc_free
+    void __libc_free(void *mem) {
   mstate ar_ptr;
-  mchunkptr p;                          /* chunk corresponding to mem */
+  mchunkptr p;  // 指向内存块的指针
 
-  if (mem == 0)                              /* free(0) has no effect */
+  if (mem == 0)  // free(0) 无效
     return;
 
-  /* Quickly check that the freed pointer matches the tag for the memory.
-     This gives a useful double-free detection.  */
-  if (__glibc_unlikely (mtag_enabled))
+  // 检查释放的指针是否匹配内存的标签，用于双重释放检测
+  if (__glibc_unlikely(mtag_enabled))
     *(volatile char *)mem;
 
   int err = errno;
 
-  p = mem2chunk (mem);
+  p = mem2chunk(mem);
 
-  if (chunk_is_mmapped (p))                       /* release mmapped memory. */
-    {
-      /* See if the dynamic brk/mmap threshold needs adjusting.
-	 Dumped fake mmapped chunks do not affect the threshold.  */
+  // 如果是 mmapped 内存块，调用 munmap_chunk 释放
+  if (chunk_is_mmapped(p)) {
+      // 调整动态 brk/mmap 阈值
       if (!mp_.no_dyn_threshold
-          && chunksize_nomask (p) > mp_.mmap_threshold
-          && chunksize_nomask (p) <= DEFAULT_MMAP_THRESHOLD_MAX)
-        {
-          mp_.mmap_threshold = chunksize (p);
-          mp_.trim_threshold = 2 * mp_.mmap_threshold;
-          LIBC_PROBE (memory_mallopt_free_dyn_thresholds, 2,
-                      mp_.mmap_threshold, mp_.trim_threshold);
-        }
-      munmap_chunk (p);
-    }
-  else
-    {
-      MAYBE_INIT_TCACHE ();
+	  && chunksize_nomask(p) > mp_.mmap_threshold
+	  && chunksize_nomask(p) <= DEFAULT_MMAP_THRESHOLD_MAX) {
+	  mp_.mmap_threshold = chunksize(p);
+	  mp_.trim_threshold = 2 * mp_.mmap_threshold;
+	  LIBC_PROBE(memory_mallopt_free_dyn_thresholds, 2,
+		      mp_.mmap_threshold, mp_.trim_threshold);
+	}
+      munmap_chunk(p);
+    } else {
+      MAYBE_INIT_TCACHE();
 
-      /* Mark the chunk as belonging to the library again.  */
-      (void)tag_region (chunk2mem (p), memsize (p));
+      // 标记内存块属于库
+      (void)tag_region(chunk2mem(p), memsize(p));
 
-      ar_ptr = arena_for_chunk (p);
-      _int_free (ar_ptr, p, 0);
+      ar_ptr = arena_for_chunk(p);
+      _int_free(ar_ptr, p, 0);
     }
 
-  __set_errno (err);
+  __set_errno(err);
 }
-libc_hidden_def (__libc_free)
+// 隐藏函数 __libc_free
+libc_hidden_def(__libc_free)
 
-void *
-__libc_realloc (void *oldmem, size_t bytes)
-{
+    // 定义内存重新分配函数 __libc_realloc
+    void *__libc_realloc(void *oldmem, size_t bytes) {
   mstate ar_ptr;
-  INTERNAL_SIZE_T nb;         /* padded request size */
+  INTERNAL_SIZE_T nb;  // 填充后的请求大小
 
-  void *newp;             /* chunk to return */
+  void *newp;  // 用于返回的内存块指针
 
   if (!__malloc_initialized)
-    ptmalloc_init ();
+    ptmalloc_init();
 
 #if REALLOC_ZERO_BYTES_FREES
-  if (bytes == 0 && oldmem != NULL)
-    {
-      __libc_free (oldmem); return 0;
+  // 如果请求大小为 0，且原内存不为空，则等同于 malloc
+  if (bytes == 0 && oldmem != NULL) {
+      __libc_free(oldmem);
+      return 0;
     }
 #endif
 
-  /* realloc of null is supposed to be same as malloc */
+  // 如果原内存为空，则等同于 malloc
   if (oldmem == 0)
-    return __libc_malloc (bytes);
+    return __libc_malloc(bytes);
 
-  /* Perform a quick check to ensure that the pointer's tag matches the
-     memory's tag.  */
-  if (__glibc_unlikely (mtag_enabled))
-    *(volatile char*) oldmem;
+  // 快速检查指针的标签是否匹配内存的标签
+  if (__glibc_unlikely(mtag_enabled))
+    *(volatile char *)oldmem;
 
-  /* chunk corresponding to oldmem */
-  const mchunkptr oldp = mem2chunk (oldmem);
+  // 获取原内存对应的内存块指针
+  const mchunkptr oldp = mem2chunk(oldmem);
 
-  /* Return the chunk as is if the request grows within usable bytes, typically
-     into the alignment padding.  We want to avoid reusing the block for
-     shrinkages because it ends up unnecessarily fragmenting the address space.
-     This is also why the heuristic misses alignment padding for THP for
-     now.  */
-  size_t usable = musable (oldmem);
-  if (bytes <= usable)
-    {
+  // 如果请求大小在可用字节范围内，直接返回原内存
+  size_t usable = musable(oldmem);
+  if (bytes <= usable) {
       size_t difference = usable - bytes;
-      if ((unsigned long) difference < 2 * sizeof (INTERNAL_SIZE_T)
-	  || (chunk_is_mmapped (oldp) && difference <= GLRO (dl_pagesize)))
+      if ((unsigned long)difference < 2 * sizeof(INTERNAL_SIZE_T) ||
+	  (chunk_is_mmapped(oldp) && difference <= GLRO(dl_pagesize)))
 	return oldmem;
     }
 
-  /* its size */
-  const INTERNAL_SIZE_T oldsize = chunksize (oldp);
+  // 获取原内存块的大小
+  const INTERNAL_SIZE_T oldsize = chunksize(oldp);
 
-  if (chunk_is_mmapped (oldp))
+  if (chunk_is_mmapped(oldp))
     ar_ptr = NULL;
-  else
-    {
-      MAYBE_INIT_TCACHE ();
-      ar_ptr = arena_for_chunk (oldp);
+  else {
+      MAYBE_INIT_TCACHE();
+      ar_ptr = arena_for_chunk(oldp);
     }
 
-  /* Little security check which won't hurt performance: the allocator
-     never wraps around at the end of the address space.  Therefore
-     we can exclude some size values which might appear here by
-     accident or by "design" from some intruder.  */
-  if ((__builtin_expect ((uintptr_t) oldp > (uintptr_t) -oldsize, 0)
-       || __builtin_expect (misaligned_chunk (oldp), 0)))
-      malloc_printerr ("realloc(): invalid pointer");
+  // 安全检查，确保分配器不会在地址空间的末尾循环
+  if ((__builtin_expect((uintptr_t)oldp > (uintptr_t)-oldsize, 0) ||
+       __builtin_expect(misaligned_chunk(oldp), 0)))
+    malloc_printerr("realloc(): invalid pointer");
 
-  nb = checked_request2size (bytes);
-  if (nb == 0)
-    {
-      __set_errno (ENOMEM);
+  nb = checked_request2size(bytes);
+  if (nb == 0) {
+      __set_errno(ENOMEM);
       return NULL;
     }
 
-  if (chunk_is_mmapped (oldp))
-    {
+  // 如果是 mmapped 内存块，调用 mremap_chunk 进行重新映射
+  if (chunk_is_mmapped(oldp)) {
       void *newmem;
 
 #if HAVE_MREMAP
-      newp = mremap_chunk (oldp, nb);
-      if (newp)
-	{
-	  void *newmem = chunk2mem_tag (newp);
-	  /* Give the new block a different tag.  This helps to ensure
-	     that stale handles to the previous mapping are not
-	     reused.  There's a performance hit for both us and the
-	     caller for doing this, so we might want to
-	     reconsider.  */
-	  return tag_new_usable (newmem);
+      newp = mremap_chunk(oldp, nb);
+      if (newp) {
+	  newmem = chunk2mem_tag(newp);
+	  // 给新块设置不同的标签，以确保不会重用先前映射的过期句柄
+	  return tag_new_usable(newmem);
 	}
 #endif
-      /* Note the extra SIZE_SZ overhead. */
+      // 注意额外的 SIZE_SZ 开销
       if (oldsize - SIZE_SZ >= nb)
-        return oldmem;                         /* do nothing */
+	return oldmem;  // 无需操作
 
-      /* Must alloc, copy, free. */
-      newmem = __libc_malloc (bytes);
+      // 必须分配、复制、释放
+      newmem = __libc_malloc(bytes);
       if (newmem == 0)
-        return 0;              /* propagate failure */
+	return 0;  // 传播失败
 
-      memcpy (newmem, oldmem, oldsize - CHUNK_HDR_SZ);
-      munmap_chunk (oldp);
+      memcpy(newmem, oldmem, oldsize - CHUNK_HDR_SZ);
+      munmap_chunk(oldp);
       return newmem;
     }
 
-  if (SINGLE_THREAD_P)
-    {
-      newp = _int_realloc (ar_ptr, oldp, oldsize, nb);
-      assert (!newp || chunk_is_mmapped (mem2chunk (newp)) ||
-	      ar_ptr == arena_for_chunk (mem2chunk (newp)));
+  // 如果是单线程环境，直接使用 main_arena 进行重新分配
+  if (SINGLE_THREAD_P) {
+      newp = _int_realloc(ar_ptr, oldp, oldsize, nb);
+      assert(!newp || chunk_is_mmapped(mem2chunk(newp)) ||
+	      ar_ptr == arena_for_chunk(mem2chunk(newp)));
 
       return newp;
     }
 
-  __libc_lock_lock (ar_ptr->mutex);
+  __libc_lock_lock(ar_ptr->mutex);
 
-  newp = _int_realloc (ar_ptr, oldp, oldsize, nb);
+  newp = _int_realloc(ar_ptr, oldp, oldsize, nb);
 
-  __libc_lock_unlock (ar_ptr->mutex);
-  assert (!newp || chunk_is_mmapped (mem2chunk (newp)) ||
-          ar_ptr == arena_for_chunk (mem2chunk (newp)));
+  __libc_lock_unlock(ar_ptr->mutex);
+  assert(!newp || chunk_is_mmapped(mem2chunk(newp)) ||
+	  ar_ptr == arena_for_chunk(mem2chunk(newp)));
 
-  if (newp == NULL)
-    {
-      /* Try harder to allocate memory in other arenas.  */
-      LIBC_PROBE (memory_realloc_retry, 2, bytes, oldmem);
-      newp = __libc_malloc (bytes);
-      if (newp != NULL)
-        {
-	  size_t sz = memsize (oldp);
-	  memcpy (newp, oldmem, sz);
-	  (void) tag_region (chunk2mem (oldp), sz);
-          _int_free (ar_ptr, oldp, 0);
-        }
+  if (newp == NULL) {
+      // 尝试在其他 arena 中分配内存
+      LIBC_PROBE(memory_realloc_retry, 2, bytes, oldmem);
+      newp = __libc_malloc(bytes);
+      if (newp != NULL) {
+	  size_t sz = memsize(oldp);
+	  memcpy(newp, oldmem, sz);
+	  (void)tag_region(chunk2mem(oldp), sz);
+	  _int_free(ar_ptr, oldp, 0);
+	}
     }
 
   return newp;
 }
 libc_hidden_def (__libc_realloc)
 
+// 定义按照指定对齐方式分配内存函数 __libc_memalign
 void *
 __libc_memalign (size_t alignment, size_t bytes)
 {
   if (!__malloc_initialized)
-    ptmalloc_init ();
+    ptmalloc_init();
 
-  void *address = RETURN_ADDRESS (0);
-  return _mid_memalign (alignment, bytes, address);
+  void *address = RETURN_ADDRESS(0);
+  return _mid_memalign(alignment, bytes, address);
 }
-libc_hidden_def (__libc_memalign)
+// 隐藏函数 __libc_memalign
+libc_hidden_def(__libc_memalign)
 
 /* For ISO C17.  */
 void *
