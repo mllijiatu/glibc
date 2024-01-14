@@ -1819,78 +1819,72 @@ get_max_fast (void)
 
 struct malloc_state
 {
-  /* Serialize access.  */
+  /* 用于串行化访问的互斥锁。 */
   __libc_lock_define (, mutex);
 
-  /* Flags (formerly in max_fast).  */
+  /* 标志位（以前在 max_fast 中）。 */
   int flags;
 
-  /* Set if the fastbin chunks contain recently inserted free blocks.  */
-  /* Note this is a bool but not all targets support atomics on booleans.  */
+  /* 如果 fastbin 中包含最近插入的空闲块，则设置为 1。注意这是一个布尔值，但不是所有目标都支持布尔值上的原子操作。 */
   int have_fastchunks;
 
-  /* Fastbins */
+  /* 快速分配链表 */
   mfastbinptr fastbinsY[NFASTBINS];
 
-  /* Base of the topmost chunk -- not otherwise kept in a bin */
+  /* 最上面的块的基地址 -- 通常不存储在链表中 */
   mchunkptr top;
 
-  /* The remainder from the most recent split of a small request */
+  /* 最近拆分的小请求的剩余部分 */
   mchunkptr last_remainder;
 
-  /* Normal bins packed as described above */
+  /* 正常的块按照上面描述的方式打包 */
   mchunkptr bins[NBINS * 2 - 2];
 
-  /* Bitmap of bins */
+  /* bins 的位图 */
   unsigned int binmap[BINMAPSIZE];
 
-  /* Linked list */
+  /* 链表 */
   struct malloc_state *next;
 
-  /* Linked list for free arenas.  Access to this field is serialized
-     by free_list_lock in arena.c.  */
+  /* 空闲内存块的链表。通过 arena.c 中的 free_list_lock 对该字段的访问进行串行化。 */
   struct malloc_state *next_free;
 
-  /* Number of threads attached to this arena.  0 if the arena is on
-     the free list.  Access to this field is serialized by
-     free_list_lock in arena.c.  */
+  /* 连接到此 arena 的线程数。如果 arena 在空闲列表上，则为 0。通过 arena.c 中的 free_list_lock 对该字段的访问进行串行化。 */
   INTERNAL_SIZE_T attached_threads;
 
-  /* Memory allocated from the system in this arena.  */
+  /* 在此 arena 中从系统分配的内存。*/
   INTERNAL_SIZE_T system_mem;
   INTERNAL_SIZE_T max_system_mem;
 };
 
+
 struct malloc_par
 {
-  /* Tunable parameters */
-  unsigned long trim_threshold;
-  INTERNAL_SIZE_T top_pad;
-  INTERNAL_SIZE_T mmap_threshold;
-  INTERNAL_SIZE_T arena_test;
-  INTERNAL_SIZE_T arena_max;
+  /* 可调参数 */
+  unsigned long trim_threshold;    /* 用于调整堆大小的阈值 */
+  INTERNAL_SIZE_T top_pad;         /* 堆顶额外的填充空间 */
+  INTERNAL_SIZE_T mmap_threshold;  /* 触发 mmap 的阈值 */
+  INTERNAL_SIZE_T arena_test;      /* 用于确定是否需要测试新 arena 的阈值 */
+  INTERNAL_SIZE_T arena_max;       /* arena 的最大数量 */
 
   /* Transparent Large Page support.  */
-  INTERNAL_SIZE_T thp_pagesize;
-  /* A value different than 0 means to align mmap allocation to hp_pagesize
-     add hp_flags on flags.  */
+  INTERNAL_SIZE_T thp_pagesize;    /* 大页支持的页面大小 */
+  /* 如果值非零，表示将 mmap 分配对齐到 hp_pagesize，并在 flags 上添加 hp_flags。 */
   INTERNAL_SIZE_T hp_pagesize;
   int hp_flags;
 
-  /* Memory map support */
-  int n_mmaps;
-  int n_mmaps_max;
-  int max_n_mmaps;
-  /* the mmap_threshold is dynamic, until the user sets
-     it manually, at which point we need to disable any
-     dynamic behavior. */
+  /* 内存映射支持 */
+  int n_mmaps;                     /* 当前分配的内存映射数量 */
+  int n_mmaps_max;                 /* 可以分配的最大内存映射数量 */
+  int max_n_mmaps;                 /* 最大内存映射数量 */
+  /* mmap_threshold 是动态的，直到用户手动设置它，此时我们需要禁用任何动态行为。 */
   int no_dyn_threshold;
 
-  /* Statistics */
-  INTERNAL_SIZE_T mmapped_mem;
-  INTERNAL_SIZE_T max_mmapped_mem;
+  /* 统计信息 */
+  INTERNAL_SIZE_T mmapped_mem;     /* 映射到内存的总量 */
+  INTERNAL_SIZE_T max_mmapped_mem; /* 最大映射到内存的总量 */
 
-  /* First address handed out by MORECORE/sbrk.  */
+  /* MORECORE/sbrk 分配的第一个地址。 */
   char *sbrk_base;
 
 #if USE_TCACHE
@@ -1949,14 +1943,14 @@ static struct malloc_par mp_ =
    This is called from ptmalloc_init () or from _int_new_arena ()
    when creating a new arena.
  */
-
+// 初始化 malloc 内存分配器的状态。它建立了正常 bins 的循环链接，根据条件设置了非连续模式，对主分配区设置了最大的快速分配大小，并初始化了 have_fastchunks 和 top。
 static void
 malloc_init_state (mstate av)
 {
   int i;
   mbinptr bin;
 
-  /* Establish circular links for normal bins */
+  /* 为正常的 bins 建立循环链接 */
   for (i = 1; i < NBINS; ++i)
     {
       bin = bin_at (av, i);
@@ -1964,15 +1958,22 @@ malloc_init_state (mstate av)
     }
 
 #if MORECORE_CONTIGUOUS
+  // 如果不是主分配区（main_arena），则设置为非连续模式
   if (av != &main_arena)
 #endif
-  set_noncontiguous (av);
+    set_noncontiguous (av);
+
+  // 如果是主分配区（main_arena），设置最大的快速分配大小
   if (av == &main_arena)
     set_max_fast (DEFAULT_MXFAST);
+
+  // 将 av->have_fastchunks 的值设为 false，使用原子操作
   atomic_store_relaxed (&av->have_fastchunks, false);
 
+  // 初始化 av->top，使用 initial_top 函数
   av->top = initial_top (av);
 }
+
 
 /*
    Other internal utilities operating on mstates
