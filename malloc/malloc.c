@@ -1134,17 +1134,17 @@ static size_t musable (void *mem);
 */
 
 struct malloc_chunk {
+  INTERNAL_SIZE_T mchunk_prev_size;  /* 如果空闲，表示前一个块的大小。 */
+  INTERNAL_SIZE_T mchunk_size;       /* 包括开销在内的字节大小。 */
 
-  INTERNAL_SIZE_T      mchunk_prev_size;  /* Size of previous chunk (if free).  */
-  INTERNAL_SIZE_T      mchunk_size;       /* Size in bytes, including overhead. */
+  struct malloc_chunk* fd;           /* 双向链接，仅在空闲时使用。指向下一个空闲块。 */
+  struct malloc_chunk* bk;           /* 双向链接，仅在空闲时使用。指向前一个空闲块。 */
 
-  struct malloc_chunk* fd;         /* double links -- used only if free. */
-  struct malloc_chunk* bk;
-
-  /* Only used for large blocks: pointer to next larger size.  */
-  struct malloc_chunk* fd_nextsize; /* double links -- used only if free. */
-  struct malloc_chunk* bk_nextsize;
+  /* 仅用于大块：指向下一个较大大小的块。*/
+  struct malloc_chunk* fd_nextsize;  /* 双向链接，仅在空闲时使用。指向下一个较大大小的块。 */
+  struct malloc_chunk* bk_nextsize;  /* 双向链接，仅在空闲时使用。指向前一个较大大小的块。 */
 };
+
 
 
 /*
